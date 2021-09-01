@@ -75,7 +75,7 @@ export default class Video extends Component {
     this.setNativeProps({ fullscreen: false });
   };
 
-  save = async (options?) => {
+  save = async (options) => {
     return await NativeModules.VideoManager.save(options, findNodeHandle(this._root));
   }
 
@@ -304,6 +304,9 @@ export default class Video extends Component {
         patchVer: source.patchVer || 0,
         requestHeaders: source.headers ? this.stringsOnlyObject(source.headers) : {},
       },
+      cache: nativeProps.cache,
+      maxCacheSize: nativeProps.maxCacheSize,
+      maxCacheFileSize: nativeProps.maxCacheFileSize,
       onVideoLoadStart: this._onLoadStart,
       onVideoLoad: this._onLoad,
       onVideoError: this._onError,
@@ -372,6 +375,9 @@ Video.propTypes = {
   filterEnabled: PropTypes.bool,
   /* Native only */
   src: PropTypes.object,
+  cache: PropTypes.bool,
+  maxCacheSize: PropTypes.number,
+  maxCacheFileSize: PropTypes.number,
   seek: PropTypes.oneOfType([
     PropTypes.number,
     PropTypes.object,
