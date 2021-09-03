@@ -93,6 +93,7 @@ public class ReactExoplayerViewManager extends ViewGroupManager<ReactExoplayerVi
     @Override
     public void onDropViewInstance(ReactExoplayerView view) {
         view.cleanUpResources();
+        removeAllViews(view);
     }
 
     @Override

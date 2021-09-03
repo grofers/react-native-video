@@ -3,8 +3,10 @@ package com.brentvatne.exoplayer;
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.content.Context;
+import android.media.AudioFocusRequest;
 import android.media.AudioManager;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Handler;
 import android.os.Message;
 import android.text.TextUtils;
@@ -36,6 +38,7 @@ import com.google.android.exoplayer2.PlaybackParameters;
 import com.google.android.exoplayer2.Player;
 import com.google.android.exoplayer2.SimpleExoPlayer;
 import com.google.android.exoplayer2.Timeline;
+import com.google.android.exoplayer2.audio.AudioAttributes;
 import com.google.android.exoplayer2.drm.DefaultDrmSessionManager;
 import com.google.android.exoplayer2.drm.DrmSessionEventListener;
 import com.google.android.exoplayer2.drm.DrmSessionManager;
@@ -165,6 +168,7 @@ class ReactExoplayerView extends FrameLayout implements
     private final ThemedReactContext themedReactContext;
     private final AudioManager audioManager;
     private final AudioBecomingNoisyReceiver audioBecomingNoisyReceiver;
+    private AudioFocusRequest audioFocusRequest = null;
 
     private final Handler progressHandler = new Handler() {
         @Override
@@ -230,6 +234,13 @@ class ReactExoplayerView extends FrameLayout implements
         exoPlayerView.setLayoutParams(layoutParams);
 
         addView(exoPlayerView, 0, layoutParams);
+        
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            audioFocusRequest = new AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
+                    .setOnAudioFocusChangeListener(this)
+                    .setWillPauseWhenDucked(false)
+                    .build();
+        }
     }
 
     @Override
@@ -411,9 +422,14 @@ class ReactExoplayerView extends FrameLayout implements
                     DefaultRenderersFactory renderersFactory =
                             new DefaultRenderersFactory(getContext())
                                     .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_OFF);
+                    AudioAttributes audioAttributes = new AudioAttributes.Builder()
+                                                        .setContentType(C.CONTENT_TYPE_MOVIE)
+                                                        .setUsage(C.USAGE_MEDIA)
+                                                        .build();
                     player = new SimpleExoPlayer.Builder(getContext(), renderersFactory)
-                                .setTrackSelector​(trackSelector)
+                                .setTrackSelector(trackSelector)
                                 .setBandwidthMeter(bandwidthMeter)
+                                .setAudioAttributes(audioAttributes, false)
                                 .setLoadControl(defaultLoadControl)
                                 .build();
                     player.addListener(self);
@@ -577,14 +593,32 @@ class ReactExoplayerView extends FrameLayout implements
         bandwidthMeter.removeEventListener(this);
     }
 
-    private boolean requestAudioFocus() {
-        if (disableFocus || srcUri == null || this.hasAudioFocus) {
-            return true;
+    private void requestAudioFocus() {
+        if (disableFocus || srcUri == null || this.hasAudioFocus || this.muted) {
+            return;
         }
-        int result = audioManager.requestAudioFocus(this,
-                AudioManager.STREAM_MUSIC,
-                AudioManager.AUDIOFOCUS_GAIN);
-        return result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED;
+        int result;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && audioFocusRequest != null) {
+            result = audioManager.requestAudioFocus(audioFocusRequest);
+        } else {
+            result = audioManager.requestAudioFocus(this,
+                                                    AudioManager.STREAM_MUSIC,
+                                                    AudioManager.AUDIOFOCUS_GAIN_TRANSIENT);
+        }
+        this.hasAudioFocus = result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED;
+    }
+    
+    private void abandonAudioFocus() {
+        if (disableFocus || srcUri == null || !this.hasAudioFocus) {
+            return;
+        }
+        int result;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && audioFocusRequest != null) {
+            result = audioManager.abandonAudioFocusRequest(audioFocusRequest);
+        } else {
+            result = audioManager.abandonAudioFocus(this);
+        }
+        this.hasAudioFocus = result != AudioManager.AUDIOFOCUS_REQUEST_GRANTED;
     }
 
     private void setPlayWhenReady(boolean playWhenReady) {
@@ -593,12 +627,13 @@ class ReactExoplayerView extends FrameLayout implements
         }
 
         if (playWhenReady) {
-            this.hasAudioFocus = requestAudioFocus();
-            if (this.hasAudioFocus) {
+            requestAudioFocus();
+            if (this.hasAudioFocus || this.muted) {
                 player.setPlayWhenReady(true);
             }
         } else {
             player.setPlayWhenReady(false);
+            abandonAudioFocus();
         }
     }
 
@@ -645,7 +680,7 @@ class ReactExoplayerView extends FrameLayout implements
         if (isFullscreen) {
             setFullscreen(false);
         }
-        audioManager.abandonAudioFocus(this);
+        abandonAudioFocus();
     }
 
     private void updateResumePosition() {
@@ -700,16 +735,12 @@ class ReactExoplayerView extends FrameLayout implements
     public void onAudioFocusChange(int focusChange) {
         switch (focusChange) {
             case AudioManager.AUDIOFOCUS_LOSS:
-                this.hasAudioFocus = false;
-                eventEmitter.audioFocusChanged(false);
-                pausePlayback();
-                audioManager.abandonAudioFocus(this);
-                break;
             case AudioManager.AUDIOFOCUS_LOSS_TRANSIENT:
+                abandonAudioFocus();
                 eventEmitter.audioFocusChanged(false);
                 break;
             case AudioManager.AUDIOFOCUS_GAIN:
-                this.hasAudioFocus = true;
+                requestAudioFocus();
                 eventEmitter.audioFocusChanged(true);
                 break;
             default:
@@ -1265,6 +1296,11 @@ class ReactExoplayerView extends FrameLayout implements
         audioVolume = muted ? 0.f : 1.f;
         if (player != null) {
             player.setVolume(audioVolume);
+            if (muted) {
+                abandonAudioFocus();
+            } else {
+                requestAudioFocus();
+            }
         }
     }
 
